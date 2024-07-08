@@ -1,0 +1,14 @@
+[
+    {
+        "ParameterKey": "pDatabasePrefixList",
+        "ParameterValue": "d_perm_aws"
+    },
+    {
+        "ParameterKey": "pDatabasePrefixSeparator",
+        "ParameterValue": ","
+    },
+    {
+        "ParameterKey": "pReplicationSchedule",
+        "ParameterValue": "cron(*/30 * * * ? *)"
+    }
+]

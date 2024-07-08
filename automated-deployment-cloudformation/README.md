@@ -22,7 +22,7 @@ This guide explains how to deploy the AWS Glue data catalog utility in both the 
 4. Git clone this repository:
     ```bash
     git clone https://github.com/aws-samples/aws-glue-data-catalog-replication-utility.git
-    cd ./aws-glue-data-catalog-replication-utility/automated-deployment/source-account/
+    cd ./aws-glue-data-catalog-replication-utility/automated-deployment-cloudformation/source-account/
     ```
 
 5. Modify the ```parameters.json``` file with relevant values:
@@ -87,7 +87,7 @@ You can add statements for as many target accounts as necessary. More details on
 4. Git clone this repository:
     ```bash
     git clone https://github.com/aws-samples/aws-glue-data-catalog-replication-utility.git
-    cd ./aws-glue-data-catalog-replication-utility/automated-deployment/target-account/
+    cd ./aws-glue-data-catalog-replication-utility/automated-deployment-cloudformation/target-account/
     ```
 
 5. Then run:

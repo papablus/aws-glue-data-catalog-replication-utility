@@ -4,10 +4,11 @@ This Utility is used to replicate Glue Data Catalog from one AWS account to anot
 ![Alt](./src/test/resources/Glue_Replication.png)
 
 ## Automated Deployment
-Follow the instructions in this [README.md](automated-deployment/README.md) to deploy this utility through CloudFormation in your AWS accounts. Otherwise follow the guide below for a manual deployment.
+- Follow the instructions in this [README.md](automated-deployment-cloudformation/README.md) to deploy this utility through CloudFormation + Java in your AWS accounts. 
+- Follow the instructions in this [README.md](automated-deployment-cdk/README.md) to deploy this utility through CDK + Python in your AWS accounts. 
+Otherwise follow the guide below for a manual deployment.
 
-## Build Instructions
-
+## Build Instructions for CloudFormation + Java Deployment
 1. The source code has Maven nature, you can build it using standard Maven commands e.g. ```mvn -X clean install```. or use the options available in your IDE
 2. The above step generates a Jar file e.g. aws-glue-data-catalog-replication-utility-1.0.0.jar
 
@@ -227,7 +228,7 @@ This utility requires the following AWS services
 11. Add Dead Letter SQS Queue as a trigger to **DLQProcessorLambda** Lambda function
 	1. Batch size = 1
 
-## Advantages
+## General Advantages
 This solution was designed around 3 main tenets, which are simplicity, scalability, and cost-effectiveness. 
 The following are direct benefits:
 
@@ -236,17 +237,30 @@ The following are direct benefits:
 3.	Light weight and dependable at scale.
 4.	The implementation is fully customizable.
 
+### Python
+1. Automatic ongoing replication through Amazon EventBridge event using the followings AWS Glue Datacatalog events:
+- CreateTable, DeleteTable and BatchDeleteTable for "detail-type":"Glue Data Catalog Database State Change"
+- UpdateTable, CreatePartition, BatchCreatePartition, UpdatePartition, DeletePartition, BatchUpdatePartition and BatchDeletePartition for "detail-type":"Glue Data Catalog Table State Change" 
+2. Large schema table replication. If the table schema size is bigger than 256kb, use LArgeTable strategy to replicated it
+3. Replication is done sending chunks of tables, leading to improved overall times when thousand of tables are replicated 
+
 ## Limitations
 Following are the primary limitations:
+### Java
 1. This utility is NOT intended for real-time replication. Refer section [Use Case 2 - Ongoing replication](#Use-Case-2:-Ongoing-replication) to know about how to run the replication process as a scheduled job.
-2. This utility is NOT intended for two-way replication between AWS Accounts. 
-3. This utility does NOT attempt to resolve database and table name conflicts which may result in undesirable behavior.
+2. Tables with schema size bigger than 256kb are not replicated
+3. Replication is done sending one to one events through Amazon SQS and Amazon SNS, leading to increase overall times when thousand of tables are replicated 
+
+### Java & Python
+1. This utility is NOT intended for two-way replication between AWS Accounts. 
+2. This utility does NOT attempt to resolve database and table name conflicts which may result in undesirable behavior.
 
 ## Applicable Use Cases
 ### Use Case 1: One-time replication 
 To do this, you can run **GDCReplicationPlannerLambda** function using a Test event in AWS Lambda console.
 
-### Use Case 2: Ongoing replication
+### Use Case 2: Ongoing replication*
+JAVA
 To do this, you can create a CloudWatch Event Rule in Source Account and add **GDCReplicationPlannerLambda** as its target. 
 Refer the following AWS documentation for more details:
 1. [Schedule Expressions for Rules](https://docs.aws.amazon.com/AmazonCloudWatch/latest/events/ScheduledEvents.html)
@@ -262,6 +276,9 @@ Those actions are summarized in the following table.
 |Database	| Database does not exist 					| Create Database  |
 |Table		| Table exist already						| Update Table     | 
 |Table		| Table does not exist 						| Create Table     |
+|Table		| Table exist already						| Delete Table*    |
+
+*This kind of action, only wortks for CDK + Python Deployment
 
 For partitions, the actions are summarized in the following table:
 

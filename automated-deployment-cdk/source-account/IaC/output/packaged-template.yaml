@@ -1,0 +1,310 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AWS Glue Data Catalog Replication Utility - Source Account
+Parameters:
+  pDatabasePrefixList:
+    Description: List of database prefixes separated by a token. E.g. raw_data_,processed_data_.
+      To export all databases, do not add this variable
+    Type: String
+    Default: ''
+  pDatabasePrefixSeparator:
+    Description: The separator used in the database_prefix_list. E.g. ,. This can
+      be skipped when database_prefix_list is not added
+    Type: String
+    Default: '|'
+  pReplicationSchedule:
+    Description: Cron Expression to schedule and trigger Glue catalog replication
+    Type: String
+    Default: cron(30 0 * * ? *)
+  pKmsKeyARNSQS:
+    Description: KMS Key ARN for SQS Queue
+    Type: String
+    Default: ''
+  pKmsKeyARNSNS:
+    Description: KMS Key ARN for SNS Topic
+    Type: String
+    Default: ''
+Resources:
+  rGlueDatabaseExportTask:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: glue_database_export_task
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: db_id
+        AttributeType: S
+      - AttributeName: export_run_id
+        AttributeType: N
+      KeySchema:
+      - AttributeName: db_id
+        KeyType: HASH
+      - AttributeName: export_run_id
+        KeyType: RANGE
+  rDBStatus:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: db_status
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: db_id
+        AttributeType: S
+      - AttributeName: export_run_id
+        AttributeType: N
+      KeySchema:
+      - AttributeName: db_id
+        KeyType: HASH
+      - AttributeName: export_run_id
+        KeyType: RANGE
+  rTableStatus:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: table_status
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: table_id
+        AttributeType: S
+      - AttributeName: export_run_id
+        AttributeType: N
+      KeySchema:
+      - AttributeName: table_id
+        KeyType: HASH
+      - AttributeName: export_run_id
+        KeyType: RANGE
+  rReplicationPlannerSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: ReplicationPlannerSNSTopic
+      KmsMasterKeyId:
+        Ref: pKmsKeyARNSNS
+  rSchemaDistributionSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: SchemaDistributionSNSTopic
+      KmsMasterKeyId:
+        Ref: pKmsKeyARNSNS
+  rImportLargeTableBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Join:
+        - ''
+        - - import-large-table-
+          - Fn::Select:
+            - 2
+            - Fn::Split:
+              - /
+              - Ref: AWS::StackId
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+  rLargeTableSQSQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: LargeTableSQSQueue
+      VisibilityTimeout: 195
+      KmsMasterKeyId:
+        Ref: pKmsKeyARNSQS
+  rGlueCatalogReplicationPolicyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AWSLambdaExecute
+      Policies:
+      - PolicyName: GlueCatalogReplicationPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - glue:GetDatabase
+            - glue:GetPartition
+            - glue:GetTableVersion
+            - glue:GetTables
+            - glue:GetTableVersions
+            - glue:GetPartitions
+            - glue:BatchDeleteTableVersion
+            - glue:BatchGetPartition
+            - glue:GetDatabases
+            - glue:GetTable
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - sqs:DeleteMessage
+            - sqs:ListQueues
+            - sqs:GetQueueUrl
+            - sqs:ListDeadLetterSourceQueues
+            - sqs:ChangeMessageVisibility
+            - sqs:DeleteMessageBatch
+            - sqs:SendMessageBatch
+            - sqs:ReceiveMessage
+            - sqs:SendMessage
+            - sqs:GetQueueAttributes
+            - sqs:ListQueueTags
+            Resource:
+            - '*'
+          - Effect: Allow
+            Action:
+            - dynamodb:BatchWriteItem
+            - dynamodb:PutItem
+            Resource:
+            - '*'
+          - Effect: Allow
+            Action:
+            - sns:Publish
+            Resource:
+            - '*'
+  rGDCReplicationPlannerLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: s3://ibk-ml-us-east-1-058528764918-glue-data-catalog-replication/735ca7c940f4e98d28d5eaf0477bed30
+      FunctionName: GDCReplicationPlannerLambda
+      Environment:
+        Variables:
+          source_glue_catalog_id:
+            Ref: AWS::AccountId
+          ddb_name_gdc_replication_planner:
+            Ref: rGlueDatabaseExportTask
+          database_prefix_list:
+            Ref: pDatabasePrefixList
+          separator:
+            Ref: pDatabasePrefixSeparator
+          region:
+            Ref: AWS::Region
+          sns_topic_arn_gdc_replication_planner:
+            Ref: rReplicationPlannerSNSTopic
+      Handler: GDCReplicationPlanner.lambda_handler
+      Runtime: python3.10
+      Description: Replication Planner Lambda
+      MemorySize: 512
+      Timeout: 600
+      Role:
+        Fn::GetAtt:
+        - rGlueCatalogReplicationPolicyRole
+        - Arn
+  rReplicationLambdaTriggerRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: glue-catalog-replication-trigger
+      Description: Glue catalog Replication Lambda Trigger
+      State: ENABLED
+      ScheduleExpression:
+        Ref: pReplicationSchedule
+      Targets:
+      - Id: glue-catalog-replication-trigger
+        Arn:
+          Fn::GetAtt:
+          - rGDCReplicationPlannerLambda
+          - Arn
+  rPermissionEventsInvokeRoutingLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: rGDCReplicationPlannerLambda
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn:
+        Fn::GetAtt:
+        - rReplicationLambdaTriggerRule
+        - Arn
+  rExportLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: s3://ibk-ml-us-east-1-058528764918-glue-data-catalog-replication/23712944614dc920ff42932e9515b99a
+      FunctionName: ExportLambda
+      Environment:
+        Variables:
+          source_glue_catalog_id:
+            Ref: AWS::AccountId
+          ddb_name_db_export_status:
+            Ref: rDBStatus
+          ddb_name_table_export_status:
+            Ref: rTableStatus
+          region:
+            Ref: AWS::Region
+          sns_topic_arn_export_dbs_tables:
+            Ref: rSchemaDistributionSNSTopic
+          sqs_queue_url_large_tables:
+            Ref: rLargeTableSQSQueue
+          sns_topic_arn_table_list:
+            Ref: rReplicationPlannerSNSTopic
+      Handler: ExportLambda.lambda_handler
+      Runtime: python3.10
+      Description: Export Lambda
+      MemorySize: 512
+      Timeout: 600
+      Role:
+        Fn::GetAtt:
+        - rGlueCatalogReplicationPolicyRole
+        - Arn
+  rExportLambdaSNSPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName:
+        Ref: rExportLambda
+      Principal: sns.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:sns:${AWS::Region}:${AWS::AccountId}:ReplicationPlannerSNSTopic
+  rReplicationPlannerSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn:
+        Ref: rReplicationPlannerSNSTopic
+      Endpoint:
+        Fn::GetAtt:
+        - rExportLambda
+        - Arn
+      Protocol: lambda
+  rExportLargeTableLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: s3://ibk-ml-us-east-1-058528764918-glue-data-catalog-replication/eb01ffcb9090135c3ea17e3770e56bdf
+      FunctionName: ExportLargeTableLambda
+      Environment:
+        Variables:
+          s3_bucket_name:
+            Ref: rImportLargeTableBucket
+          ddb_name_table_export_status:
+            Ref: rTableStatus
+          region:
+            Ref: AWS::Region
+          sns_topic_arn_export_dbs_tables:
+            Ref: rSchemaDistributionSNSTopic
+      Handler: ExportLargeTable.lambda_handler
+      Runtime: python3.10
+      Description: Export Large Table Lambda
+      MemorySize: 512
+      Timeout: 195
+      Role:
+        Fn::GetAtt:
+        - rGlueCatalogReplicationPolicyRole
+        - Arn
+  rExportLargeTableLambdaSQSPermission:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 1
+      Enabled: true
+      EventSourceArn:
+        Fn::GetAtt:
+        - rLargeTableSQSQueue
+        - Arn
+      FunctionName:
+        Fn::GetAtt:
+        - rExportLargeTableLambda
+        - Arn
